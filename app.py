@@ -1,94 +1,97 @@
 import streamlit as st
 import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+import time
+import os
 import plotly.express as px
 
-# --- CẤU HÌNH TRANG ---
-st.set_page_config(page_title="Airline Monitor", layout="wide")
+# --- CẤU HÌNH ---
+FILE_NAME = "ba_detailed_reviews.csv"
+BASE_URL = "https://www.airlinequality.com/airline-reviews/british-airways/page/"
 
-# --- KẾT NỐI DỮ LIỆU (Google Sheets) ---
-# Lưu ý: Thay ID chính xác của bạn vào đây
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1d2JeOC7r50ISTu-9LoM9DPF6PAbQ207FtiG8y5G7vH0/export?format=csv"
+st.set_page_config(page_title="Data Monitoring System", layout="wide")
 
-@st.cache_data(ttl=600)
-def load_data():
-    try:
-        # Đọc trực tiếp từ Google Sheets
-        df = pd.read_csv(SHEET_URL)
-        # Ép kiểu dữ liệu
-        df['Date'] = pd.to_datetime(df['Date'])
-        # Đảm bảo các cột điểm số là kiểu số (numeric)
-        numeric_cols = ['Overall_Rating', 'Seat Comfort', 'Cabin Staff Service', 
-                        'Food & Beverages', 'Inflight Entertainment', 'Ground Service']
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        return df
-    except Exception as e:
-        st.error(f"Lỗi kết nối dữ liệu: {e}")
-        return None
+# --- HÀM THU THẬP DỮ LIỆU (SCRAPER) ---
+def scrape_data(max_pages=2):
+    all_reviews = []
+    for page in range(1, max_pages + 1):
+        url = f"{BASE_URL}{page}/?sortby=post_date%3ADesc&pagesize=100"
+        try:
+            response = requests.get(url)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            articles = soup.find_all("article", {"itemprop": "review"})
 
-# --- THỰC THI APP ---
-df = load_data()
+            for item in articles:
+                # Thông tin cơ bản
+                review_dict = {
+                    "Date": item.find("time", {"itemprop": "datePublished"})['datetime'],
+                    "Overall_Rating": item.find("span", {"itemprop": "ratingValue"}).text if item.find("span", {"itemprop": "ratingValue"}) else "0",
+                    "Header": item.find("h2", {"class": "text_header"}).text.strip(),
+                }
+                
+                # Bóc tách bảng chỉ số chi tiết
+                review_stats = item.find("table", {"class": "review-ratings"})
+                if review_stats:
+                    rows = review_stats.find_all("tr")
+                    for row in rows:
+                        header = row.find("td", {"class": "review-rating-header"}).text.strip()
+                        # Dạng text
+                        val = row.find("td", {"class": "review-value"})
+                        if val: review_dict[header] = val.text.strip()
+                        # Dạng sao
+                        stars = row.find("td", {"class": "review-rating-stars"})
+                        if stars: review_dict[header] = len(stars.find_all("span", {"class": "star fill"}))
+                
+                all_reviews.append(review_dict)
+            time.sleep(2) # Nghỉ ngắn để tránh bị chặn
+        except:
+            break
+    return pd.DataFrame(all_reviews)
 
-if df is not None:
-    # --- SIDEBAR: Bộ lọc (Filters) ---
-    st.sidebar.header("Bộ lọc dữ liệu")
+# --- GIAO DIỆN CHÍNH ---
+st.title("🛡️ Hệ thống Thu thập & Giám sát dữ liệu hàng không")
+st.markdown(f"**Trạng thái lưu trữ:** Lập nhật vào file `{FILE_NAME}`")
+
+# --- CHỨC NĂNG CẬP NHẬT (MONITORING LOGIC) ---
+if st.button("🔄 Cập nhật nhận xét mới nhất từ Skytrax"):
+    with st.spinner("Đang kiểm tra và thu thập dữ liệu mới..."):
+        new_df = scrape_data(max_pages=2) # Lấy 2 trang mới nhất để kiểm tra
+        
+        if os.path.exists(FILE_NAME):
+            old_df = pd.read_csv(FILE_NAME)
+            # Gộp và xóa trùng lặp dựa trên Tiêu đề và Ngày
+            combined_df = pd.concat([new_df, old_df]).drop_duplicates(subset=['Header', 'Date'], keep='last')
+            added_count = len(combined_df) - len(old_df)
+            combined_df.to_csv(FILE_NAME, index=False, encoding='utf-8-sig')
+            st.success(f"Hoàn thành! Đã tìm thấy và thêm {added_count} nhận xét mới.")
+        else:
+            new_df.to_csv(FILE_NAME, index=False, encoding='utf-8-sig')
+            st.success(f"Đã tạo file mới với {len(new_df)} nhận xét.")
+
+# --- HIỂN THỊ DỮ LIỆU ---
+if os.path.exists(FILE_NAME):
+    df = pd.read_csv(FILE_NAME)
+    df['Date'] = pd.to_datetime(df['Date'])
     
-    # Lọc theo Hạng ghế
-    all_seats = df["Seat Type"].dropna().unique()
-    seat_type = st.sidebar.multiselect("Hạng ghế:", options=all_seats, default=all_seats)
+    # KPIs đơn giản
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Tổng dữ liệu hiện có", len(df))
+    c2.metric("Đánh giá trung bình", round(df['Overall_Rating'].mean(), 2))
+    c3.metric("Lần cập nhật cuối", str(df['Date'].max().date()))
+
+    # Biểu đồ giám sát xu hướng
+    st.subheader("📈 Biểu đồ giám sát phong độ hãng bay")
+    df_trend = df.set_index('Date').resample('ME')['Overall_Rating'].mean().reset_index()
+    fig = px.area(df_trend, x='Date', y='Overall_Rating', title="Xu hướng hài lòng tích lũy")
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Bảng dữ liệu thô
+    st.subheader("📄 Dữ liệu chi tiết trong file CSV")
+    st.dataframe(df, use_container_width=True)
     
-    # Lọc theo Khuyên dùng (Yes/No)
-    rec_filter = st.sidebar.radio("Khách hàng khuyên dùng:", ["Tất cả", "Yes", "No"])
-
-    # Áp dụng bộ lọc
-    df_selection = df[df["Seat Type"].isin(seat_type)]
-    if rec_filter != "Tất cả":
-        df_selection = df_selection[df_selection["Recommended"] == rec_filter]
-
-    # --- MAIN PAGE: KPIs ---
-    st.title("✈️ British Airways Real-time Monitoring")
-    st.markdown(f"**Nguồn dữ liệu:** Google Sheets (Cập nhật mỗi 10 phút)")
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Tổng số đánh giá", len(df_selection))
-    with col2:
-        avg_rating = df_selection["Overall_Rating"].mean()
-        st.metric("Điểm trung bình", f"{avg_rating:.2f}/10" if not pd.isna(avg_rating) else "N/A")
-    with col3:
-        rec_rate = (df_selection["Recommended"] == "Yes").mean() * 100
-        st.metric("Tỷ lệ đề xuất", f"{rec_rate:.1f}%" if not pd.isna(rec_rate) else "0%")
-
-    # --- BIỂU ĐỒ MONITORING ---
-    st.markdown("---")
-    
-    # 1. Biểu đồ xu hướng
-    st.subheader("📈 Xu hướng hài lòng theo thời gian")
-    df_trend = df_selection.resample('M', on='Date')['Overall_Rating'].mean().reset_index()
-    fig_trend = px.line(df_trend, x='Date', y='Overall_Rating', 
-                        title="Biến động Overall Rating (Trung bình theo tháng)",
-                        markers=True)
-    st.plotly_chart(fig_trend, use_container_width=True)
-
-    # 2. Phân tích chi tiết dịch vụ
-    col_left, col_right = st.columns(2)
-    
-    with col_left:
-        st.subheader("📊 Điểm số theo dịch vụ")
-        service_cols = ['Seat Comfort', 'Cabin Staff Service', 'Food & Beverages', 
-                        'Inflight Entertainment', 'Ground Service']
-        # Kiểm tra xem các cột có tồn tại không trước khi tính mean
-        existing_cols = [c for c in service_cols if c in df_selection.columns]
-        avg_services = df_selection[existing_cols].mean().sort_values()
-        fig_service = px.bar(avg_services, orientation='h', 
-                             labels={'value':'Điểm (1-5)', 'index':'Dịch vụ'},
-                             color=avg_services.values, color_continuous_scale='RdYlGn')
-        st.plotly_chart(fig_service)
-
-    with col_right:
-        st.subheader("💬 Danh sách đánh giá mới nhất")
-        st.dataframe(df_selection[['Date', 'Header', 'Overall_Rating']].sort_values(by='Date', ascending=False).head(10), 
-                     use_container_width=True)
+    # Nút tải file CSV về máy
+    with open(FILE_NAME, "rb") as file:
+        st.download_button(label="📥 Tải file CSV về máy", data=file, file_name=FILE_NAME, mime="text/csv")
 else:
-    st.warning("Vui lòng kiểm tra lại quyền chia sẻ (Share) của file Google Sheets. Đảm bảo chế độ: 'Anyone with the link can view'.")
+    st.warning("Hiện chưa có dữ liệu. Vui lòng nhấn nút 'Cập nhật' ở trên để bắt đầu thu thập.")
