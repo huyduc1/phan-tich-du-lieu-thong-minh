@@ -6,92 +6,115 @@ import time
 import os
 import plotly.express as px
 
-# --- CẤU HÌNH ---
+# --- CẤU HÌNH HỆ THỐNG ---
 FILE_NAME = "ba_detailed_reviews.csv"
 BASE_URL = "https://www.airlinequality.com/airline-reviews/british-airways/page/"
 
-st.set_page_config(page_title="Data Monitoring System", layout="wide")
+st.set_page_config(page_title="Hệ thống Thu thập & Lưu trữ Dữ liệu", layout="wide")
 
-# --- HÀM THU THẬP DỮ LIỆU (SCRAPER) ---
-def scrape_data(max_pages=2):
+# --- HÀM THU THẬP DỮ LIỆU (Cào chuyên sâu) ---
+def scrape_latest_reviews(max_pages=2):
     all_reviews = []
     for page in range(1, max_pages + 1):
         url = f"{BASE_URL}{page}/?sortby=post_date%3ADesc&pagesize=100"
         try:
-            response = requests.get(url)
+            response = requests.get(url, timeout=10)
             soup = BeautifulSoup(response.content, 'html.parser')
             articles = soup.find_all("article", {"itemprop": "review"})
 
             for item in articles:
-                # Thông tin cơ bản
+                # 1. Thông tin cơ bản
                 review_dict = {
                     "Date": item.find("time", {"itemprop": "datePublished"})['datetime'],
                     "Overall_Rating": item.find("span", {"itemprop": "ratingValue"}).text if item.find("span", {"itemprop": "ratingValue"}) else "0",
                     "Header": item.find("h2", {"class": "text_header"}).text.strip(),
+                    "Review_Body": item.find("div", {"class": "text_content"}).text.strip()
                 }
                 
-                # Bóc tách bảng chỉ số chi tiết
+                # 2. Thông tin chi tiết từ bảng (Giống form khai báo)
                 review_stats = item.find("table", {"class": "review-ratings"})
                 if review_stats:
                     rows = review_stats.find_all("tr")
                     for row in rows:
                         header = row.find("td", {"class": "review-rating-header"}).text.strip()
-                        # Dạng text
+                        # Dạng text (Type of Traveller, Seat Type, v.v.)
                         val = row.find("td", {"class": "review-value"})
                         if val: review_dict[header] = val.text.strip()
-                        # Dạng sao
+                        # Dạng điểm sao (1-5)
                         stars = row.find("td", {"class": "review-rating-stars"})
                         if stars: review_dict[header] = len(stars.find_all("span", {"class": "star fill"}))
                 
                 all_reviews.append(review_dict)
-            time.sleep(2) # Nghỉ ngắn để tránh bị chặn
-        except:
+            time.sleep(5) # Nghỉ 1 giây để đảm bảo an toàn cho server
+        except Exception as e:
+            st.error(f"Lỗi tại trang {page}: {e}")
             break
     return pd.DataFrame(all_reviews)
 
-# --- GIAO DIỆN CHÍNH ---
-st.title("🛡️ Hệ thống Thu thập & Giám sát dữ liệu hàng không")
-st.markdown(f"**Trạng thái lưu trữ:** Lập nhật vào file `{FILE_NAME}`")
+# --- GIAO DIỆN APP ---
+st.title("📂 Hệ thống Cập nhật Dữ liệu Đánh giá Hàng không")
+st.info(f"Dữ liệu hiện tại được lưu trữ tại file: **{FILE_NAME}**")
 
-# --- CHỨC NĂNG CẬP NHẬT (MONITORING LOGIC) ---
-if st.button("🔄 Cập nhật nhận xét mới nhất từ Skytrax"):
-    with st.spinner("Đang kiểm tra và thu thập dữ liệu mới..."):
-        new_df = scrape_data(max_pages=2) # Lấy 2 trang mới nhất để kiểm tra
+# --- KHỐI XỬ LÝ CẬP NHẬT ---
+if st.button("🚀 Bắt đầu Cập nhật Dữ liệu Mới"):
+    with st.spinner("Đang kết nối Skytrax và tìm kiếm nhận xét mới..."):
+        # Bước 1: Cào dữ liệu mới nhất (lấy 2-3 trang đầu để đảm bảo có review mới nhất)
+        new_data_df = scrape_latest_reviews(max_pages=3)
         
-        if os.path.exists(FILE_NAME):
-            old_df = pd.read_csv(FILE_NAME)
-            # Gộp và xóa trùng lặp dựa trên Tiêu đề và Ngày
-            combined_df = pd.concat([new_df, old_df]).drop_duplicates(subset=['Header', 'Date'], keep='last')
-            added_count = len(combined_df) - len(old_df)
-            combined_df.to_csv(FILE_NAME, index=False, encoding='utf-8-sig')
-            st.success(f"Hoàn thành! Đã tìm thấy và thêm {added_count} nhận xét mới.")
+        if not new_data_df.empty:
+            if os.path.exists(FILE_NAME):
+                # Bước 2: Đọc dữ liệu cũ từ file CSV
+                old_data_df = pd.read_csv(FILE_NAME)
+                
+                # Bước 3: Gộp dữ liệu và loại bỏ trùng lặp
+                # Dựa trên Header và Date để xác định một review duy nhất
+                combined_df = pd.concat([new_data_df, old_data_df])
+                combined_df = combined_df.drop_duplicates(subset=['Header', 'Date'], keep='first')
+                
+                # Tính toán số lượng bản ghi mới thêm vào
+                new_records_count = len(combined_df) - len(old_data_df)
+                
+                # Bước 4: Lưu lại vào file .csv
+                combined_df.to_csv(FILE_NAME, index=False, encoding='utf-8-sig')
+                
+                if new_records_count > 0:
+                    st.success(f"Thành công! Đã thêm {new_records_count} nhận xét mới vào file CSV.")
+                else:
+                    st.info("Không có nhận xét nào mới hơn dữ liệu hiện tại.")
+            else:
+                # Nếu chưa có file, tạo file mới hoàn toàn
+                new_data_df.to_csv(FILE_NAME, index=False, encoding='utf-8-sig')
+                st.success(f"Đã tạo file mới và lưu {len(new_data_df)} nhận xét.")
         else:
-            new_df.to_csv(FILE_NAME, index=False, encoding='utf-8-sig')
-            st.success(f"Đã tạo file mới với {len(new_df)} nhận xét.")
+            st.error("Không thể lấy dữ liệu từ website. Vui lòng kiểm tra kết nối mạng.")
 
-# --- HIỂN THỊ DỮ LIỆU ---
+# --- HIỂN THỊ THỐNG KÊ VÀ DỮ LIỆU ---
 if os.path.exists(FILE_NAME):
     df = pd.read_csv(FILE_NAME)
     df['Date'] = pd.to_datetime(df['Date'])
-    
-    # KPIs đơn giản
+    df['Overall_Rating'] = pd.to_numeric(df['Overall_Rating'], errors='coerce')
+
+    # Thống kê nhanh
+    st.markdown("---")
     c1, c2, c3 = st.columns(3)
-    c1.metric("Tổng dữ liệu hiện có", len(df))
-    c2.metric("Đánh giá trung bình", round(df['Overall_Rating'].mean(), 2))
-    c3.metric("Lần cập nhật cuối", str(df['Date'].max().date()))
+    with c1:
+        st.metric("Tổng số dòng trong CSV", len(df))
+    with c2:
+        st.metric("Điểm Overall TB", f"{df['Overall_Rating'].mean():.2f}")
+    with c3:
+        st.metric("Ngày cập nhật cuối", str(df['Date'].max().date()))
 
-    # Biểu đồ giám sát xu hướng
-    st.subheader("📈 Biểu đồ giám sát phong độ hãng bay")
-    df_trend = df.set_index('Date').resample('ME')['Overall_Rating'].mean().reset_index()
-    fig = px.area(df_trend, x='Date', y='Overall_Rating', title="Xu hướng hài lòng tích lũy")
-    st.plotly_chart(fig, use_container_width=True)
+    # Xem trước dữ liệu
+    st.subheader("📊 Xem trước 10 dòng dữ liệu mới nhất trong CSV")
+    st.dataframe(df.sort_values(by='Date', ascending=False).head(10), use_container_width=True)
 
-    # Bảng dữ liệu thô
-    st.subheader("📄 Dữ liệu chi tiết trong file CSV")
-    st.dataframe(df, use_container_width=True)
-    
-    # Nút tải file CSV về máy
-    with open(FILE_NAME, "rb") as file:
-        st.download_button(label="📥 Tải file CSV về máy", data=file, file_name=FILE_NAME, mime="text/csv")
+    # Nút Download cho người dùng
+    with open(FILE_NAME, "rb") as f:
+        st.download_button(
+            label="📥 Tải file CSV hiện tại về máy",
+            data=f,
+            file_name=FILE_NAME,
+            mime="text/csv"
+        )
 else:
-    st.warning("Hiện chưa có dữ liệu. Vui lòng nhấn nút 'Cập nhật' ở trên để bắt đầu thu thập.")
+    st.warning("Hiện chưa có file CSV dữ liệu. Hãy nhấn nút 'Bắt đầu Cập nhật' để tạo dữ liệu.")
