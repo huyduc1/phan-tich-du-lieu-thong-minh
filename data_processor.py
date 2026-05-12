@@ -1,7 +1,7 @@
 import pandas as pd
-import numpy as np
 import os
 import streamlit as st
+import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
@@ -26,157 +26,54 @@ def load_data():
 def preprocess_data(df):
     if df is None or df.empty: return df
     
-    # Chuẩn hóa ngày và rating
-    df["Date"] = pd.to_datetime(df["Date"], format='mixed')
+    df["Date"] = pd.to_datetime(df["Date"], format='mixed', dayfirst=False)
     df["Overall_Rating"] = pd.to_numeric(df["Overall_Rating"], errors="coerce")
     
-    # Tách Route
     if 'Route' in df.columns:
         route_split = df['Route'].str.split(r'\s+to\s+', n=1, expand=True)
         df['Origin'] = route_split[0].str.strip()
         df['Destination'] = route_split[1].str.strip() if route_split.shape[1] > 1 else None
 
-    # Chuẩn hóa Recommended
     if 'Recommended' in df.columns:
         df['Recommended'] = df['Recommended'].str.strip().str.lower()
         
     return df
 
-# --- PHẦN PHÂN TÍCH NÂNG CAO (HUY ĐỨC) ---
-
 def apply_advanced_analytics(df):
-    """
-    Thực hiện:
-    - Xử lý missing values
-    - Jittering
-    - KMeans Clustering
-    - PCA Visualization
-
-    Return:
-    - df_with_ml
-    - scaled_df
-    - pca_variance
-    """
-
-    # =====================================================
-    # 1. Validate input
-    # =====================================================
     if df is None or df.empty:
-        return df, None, None
+        return df
 
-    # =====================================================
-    # 2. Copy dataframe
-    # =====================================================
-    df = df.copy()
+    features = ['Seat Comfort', 'Cabin Staff Service', 'Food & Beverages', 'Ground Service', 'Value For Money']
+    existing_features = [f for f in features if f in df.columns]
 
-    # =====================================================
-    # 3. Feature columns
-    # =====================================================
-    features = [
-        'Seat Comfort',
-        'Cabin Staff Service',
-        'Food & Beverages',
-        'Ground Service',
-        'Value For Money'
-    ]
+    if not existing_features:
+        return df
 
-    # =====================================================
-    # 4. Check existing columns
-    # =====================================================
-    existing_features = [
-        f for f in features
-        if f in df.columns
-    ]
+    # Xử lý dữ liệu số và điền khuyết
+    data_for_ml = df[existing_features].apply(pd.to_numeric, errors='coerce')
+    data_for_ml = data_for_ml.fillna(data_for_ml.median())
 
-    if len(existing_features) == 0:
-        return df, None, None
+    # Thêm nhiễu nhẹ (jitter) để tránh trùng lặp tọa độ PCA
+    data_jittered = data_for_ml + np.random.normal(0, 0.05, size=data_for_ml.shape)
 
-    # =====================================================
-    # 5. Convert numeric
-    # =====================================================
-    data_for_ml = (
-        df[existing_features]
-        .apply(pd.to_numeric, errors='coerce')
-    )
-
-    # =====================================================
-    # 6. Fill NaN with median
-    # =====================================================
-    data_for_ml = data_for_ml.fillna(
-        data_for_ml.median()
-    )
-
-    # =====================================================
-    # 7. Jittering
-    # =====================================================
-    np.random.seed(42)
-
-    data_jittered = (
-        data_for_ml
-        + np.random.normal(
-            loc=0,
-            scale=0.1,
-            size=data_for_ml.shape
-        )
-    )
-
-    # =====================================================
-    # 8. Standard Scaling
-    # =====================================================
     scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(data_jittered)
 
-    X_scaled = scaler.fit_transform(
-        data_jittered
-    )
+    # Lưu kết quả Scale
+    for i, col in enumerate(existing_features):
+        df[f"{col}_scaled"] = X_scaled[:, i]
 
-    # =====================================================
-    # 9. Create scaled dataframe
-    # =====================================================
-    scaled_df = pd.DataFrame(
-        X_scaled,
-        columns=existing_features,
-        index=df.index
-    )
+    # K-Means Clustering
+    kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
+    df['Cluster'] = kmeans.fit_predict(X_scaled).astype(str)
 
-    # =====================================================
-    # 10. KMeans Clustering
-    # =====================================================
-    kmeans = KMeans(
-        n_clusters=3,
-        random_state=42,
-        n_init=10
-    )
+    # PCA giảm chiều
+    pca = PCA(n_components=2)
+    pca_res = pca.fit_transform(X_scaled)
+    df['PCA1'] = pca_res[:, 0]
+    df['PCA2'] = pca_res[:, 1]
 
-    clusters = kmeans.fit_predict(
-        X_scaled
-    )
+    # KHẮC PHỤC LỖI: Chuyển numpy array thành list để Pandas so sánh được attrs
+    df.attrs['pca_variance'] = pca.explained_variance_ratio_.tolist()
 
-    df['Cluster'] = clusters.astype(str)
-
-    # =====================================================
-    # 11. PCA
-    # =====================================================
-    pca = PCA(
-        n_components=2,
-        random_state=42
-    )
-
-    pca_result = pca.fit_transform(
-        X_scaled
-    )
-
-    df['PCA1'] = pca_result[:, 0]
-    df['PCA2'] = pca_result[:, 1]
-
-    # =====================================================
-    # 12. PCA Variance
-    # =====================================================
-    pca_variance = (
-        pca.explained_variance_ratio_
-        .tolist()
-    )
-
-    # =====================================================
-    # 13. Return
-    # =====================================================
-    return df, scaled_df, pca_variance
+    return df
