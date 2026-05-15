@@ -139,7 +139,7 @@ def plot_pca_clusters(df):
     st.dataframe(stats_df, use_container_width=True)
 
 def plot_heatmap(df):
-    st.subheader("🔥 Ma trận tương quan")
+    st.subheader("🔥 Độ ảnh hưởng của các yếu tố đến điểm đánh giá của khách hàng")
 
     # Chỉ lấy các feature cần thiết
     selected_cols = [
