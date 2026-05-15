@@ -68,6 +68,7 @@ if df is not None:
             with c2: viz.plot_traveller_pie(df_filt)
             viz.plot_service_comparison(df_filt)
             viz.plot_pca_clusters(df_filt)
+            viz.plot_heatmap(df_filt)
         with tab2:
             st.dataframe(df_filt.head(50), use_container_width=True)
 else:
