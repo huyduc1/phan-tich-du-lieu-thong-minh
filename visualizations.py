@@ -137,3 +137,48 @@ def plot_pca_clusters(df):
     
     stats_df = df.groupby('Cluster_Label')[existing_stats].mean().round(2)
     st.dataframe(stats_df, use_container_width=True)
+
+def plot_heatmap(df):
+    st.subheader("🔥 Ma trận tương quan")
+
+    # Chỉ lấy các feature cần thiết
+    selected_cols = [
+        "Overall_Rating",
+        "Seat Comfort",
+        "Cabin Staff Service",
+        "Food & Beverages",
+        "Inflight Entertainment",
+        "Ground Service",
+        "Value For Money"
+    ]
+
+    # Giữ các cột tồn tại trong dataframe
+    available_cols = [col for col in selected_cols if col in df.columns]
+
+    if len(available_cols) < 2:
+        st.warning("Không đủ dữ liệu để tạo heatmap.")
+        return
+
+    heatmap_df = df[available_cols].copy()
+
+    for col in available_cols:
+        heatmap_df[col] = pd.to_numeric(
+            heatmap_df[col],
+            errors="coerce"
+        )
+
+    # tính toán ma trận tương quan
+    corr_matrix = heatmap_df.corr().round(2)
+
+    # vẽ heatmap
+    fig = px.imshow(
+        corr_matrix,
+        text_auto=True,
+        color_continuous_scale="RdBu_r",
+        aspect="auto"
+    )
+
+    fig.update_layout(
+        height=600,
+    )
+    st.plotly_chart(fig, use_container_width=True)
